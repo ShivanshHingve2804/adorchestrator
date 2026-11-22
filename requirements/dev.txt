@@ -1,0 +1,17 @@
+-r base.txt
+
+# Testing
+pytest>=8.0
+pytest-django>=4.9
+pytest-asyncio>=0.24
+factory-boy>=3.3
+
+# Load testing
+locust>=2.30
+
+# Linting
+ruff>=0.7
+
+# Debug
+django-debug-toolbar>=4.4
+ipython>=8.0
