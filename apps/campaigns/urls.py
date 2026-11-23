@@ -1,4 +1,10 @@
-# Stub URL files for each app — to be filled in Phase 1
-from django.urls import path
+from rest_framework.routers import SimpleRouter
 
-urlpatterns = []
+from .views import CampaignViewSet, CreativeViewSet
+
+
+router = SimpleRouter()
+router.register("", CampaignViewSet, basename="campaign")
+router.register(r"(?P<campaign_pk>[^/.]+)/creatives", CreativeViewSet, basename="campaign-creatives")
+
+urlpatterns = router.urls
