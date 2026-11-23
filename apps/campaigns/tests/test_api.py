@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -74,7 +75,8 @@ class CampaignAPITests(APITestCase):
         self.assertEqual(creative.campaign, self.campaign)
         self.assertEqual(creative.metadata, {"variant": "blue"})
 
-    def test_bulk_launch_returns_202_and_creates_deployments(self):
+    @patch("apps.campaigns.views.start_bulk_launch_workflow", return_value="bulk-launch-test-1")
+    def test_bulk_launch_returns_202_and_creates_deployments(self, start_workflow):
         self.make_creative()
 
         response = self.client.post(
@@ -86,11 +88,13 @@ class CampaignAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(len(response.data["deployments"]), 2)
         self.assertEqual(PlatformDeployment.objects.filter(campaign=self.campaign).count(), 2)
+        self.assertTrue(all(row["temporal_workflow_id"] == "bulk-launch-test-1" for row in response.data["deployments"]))
         self.assertTrue(
             all(row["status"] == PlatformDeployment.Status.PENDING for row in response.data["deployments"])
         )
 
-    def test_bulk_launch_is_idempotent_for_same_key(self):
+    @patch("apps.campaigns.views.start_bulk_launch_workflow", return_value="bulk-launch-test-2")
+    def test_bulk_launch_is_idempotent_for_same_key(self, start_workflow):
         self.make_creative()
         payload = {"platforms": ["META", "TIKTOK"], "idempotency_key": "launch-request-2"}
         path = f"/api/campaigns/{self.campaign.pk}/bulk_launch/"
@@ -105,6 +109,7 @@ class CampaignAPITests(APITestCase):
             [row["id"] for row in second.data["deployments"]],
         )
         self.assertEqual(PlatformDeployment.objects.filter(campaign=self.campaign).count(), 2)
+        start_workflow.assert_called_once()
 
     def test_bulk_launch_returns_deployment_already_stored_with_request_key(self):
         creative = self.make_creative()
@@ -125,6 +130,24 @@ class CampaignAPITests(APITestCase):
         self.assertEqual(len(response.data["deployments"]), 1)
         self.assertEqual(response.data["deployments"][0]["id"], str(existing.pk))
         self.assertEqual(PlatformDeployment.objects.filter(campaign=self.campaign).count(), 1)
+
+    @patch("apps.campaigns.views.get_temporal_workflow_status", return_value="RUNNING")
+    def test_launch_status_returns_deployments_and_temporal_status(self, get_workflow_status):
+        creative = self.make_creative()
+        deployment = PlatformDeployment.objects.create(
+            campaign=self.campaign,
+            creative=creative,
+            platform=PlatformDeployment.Platform.META,
+            idempotency_key="status-check:META:creative-1",
+            temporal_workflow_id="bulk-launch-status-check",
+        )
+
+        response = self.client.get(f"/api/campaigns/{self.campaign.pk}/launch-status/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["workflow_status"], "RUNNING")
+        self.assertEqual(response.data["deployments"][0]["id"], str(deployment.pk))
+        get_workflow_status.assert_called_once_with("bulk-launch-status-check")
 
     def make_creative(self):
         return Creative.objects.create(
