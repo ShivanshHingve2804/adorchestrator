@@ -5,17 +5,16 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # Install Python deps
 COPY requirements/ requirements/
 RUN pip install --no-cache-dir -r requirements/base.txt
 
 # Copy project
 COPY . .
+
+RUN groupadd --system app && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app \
+    && chown -R app:app /app
+
+USER app
 
 EXPOSE 8000

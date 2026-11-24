@@ -101,6 +101,25 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
+CELERY_TASK_TRACK_STARTED = True
+CELERY_BEAT_SCHEDULE = {
+    "refresh-performance-snapshots": {
+        "task": "workers.tasks.analytics.refresh_materialized_views",
+        "schedule": 900.0,
+    },
+    "detect-campaign-anomalies": {
+        "task": "workers.tasks.analytics.detect_anomalies",
+        "schedule": 900.0,
+    },
+    "maintain-ad-event-partitions": {
+        "task": "workers.tasks.analytics.maintain_event_partitions",
+        "schedule": 86400.0,
+    },
+    "generate-weekly-creative-summary": {
+        "task": "workers.tasks.creative_ai.generate_weekly_summary",
+        "schedule": 604800.0,
+    },
+}
 
 # Temporal
 TEMPORAL_HOST = os.environ.get("TEMPORAL_HOST", "temporal:7233")
@@ -109,12 +128,13 @@ TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 # Mock Platforms
 MOCK_PLATFORM_BASE_URL = os.environ.get("MOCK_PLATFORM_BASE_URL", "http://mock-platforms:8090")
 
-# AI / LLM
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-VISION_MODEL = os.environ.get("VISION_MODEL", "gemini-2.0-flash")
-TEXT_MODEL = os.environ.get("TEXT_MODEL", "gemini-2.0-flash")
+# AI provider and model identifiers are deployment configuration, not code defaults.
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "ollama").lower()
+AI_BASE_URL = os.environ.get("AI_BASE_URL", "http://ollama:11434")
+AI_VISION_MODEL = os.environ.get("AI_VISION_MODEL", "")
+AI_TEXT_MODEL = os.environ.get("AI_TEXT_MODEL", "")
+AI_API_KEY = os.environ.get("AI_API_KEY", "")
+AI_REQUEST_TIMEOUT = float(os.environ.get("AI_REQUEST_TIMEOUT", "60"))
 
 # Internationalization
 LANGUAGE_CODE = "en-us"

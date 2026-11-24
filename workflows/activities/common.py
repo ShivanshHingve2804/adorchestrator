@@ -22,6 +22,12 @@ async def _update_deployment(deployment_key, **fields):
         PlatformDeployment.objects.filter(idempotency_key=deployment_key).update(
             **fields, updated_at=timezone.now()
         )
+        if fields.get("status") == "FAILED":
+            deployment = PlatformDeployment.objects.filter(idempotency_key=deployment_key).first()
+            if deployment:
+                from apps.analytics.services import record_launch_failure
+
+                record_launch_failure(deployment.campaign_id, deployment_key, fields.get("last_error", "Campaign launch failed"))
 
     await sync_to_async(update, thread_sensitive=True)()
 

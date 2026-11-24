@@ -8,18 +8,18 @@ import django
 
 django.setup()
 
-from django.conf import settings
-from temporalio.client import Client
-from temporalio.worker import Worker
+from django.conf import settings  # noqa: E402
+from temporalio.client import Client  # noqa: E402
+from temporalio.worker import Worker  # noqa: E402
 
-from workflows.activities.activate_campaign import activate_campaign
-from workflows.activities.common import mark_deployment_failed, set_campaign_status
-from workflows.activities.create_campaign import create_campaign
-from workflows.activities.rollback_campaign import rollback_campaign
-from workflows.activities.set_budget import set_budget
-from workflows.activities.upload_media import upload_media
-from workflows.activities.validate_creative import validate_creative
-from workflows.bulk_launch_workflow import BulkCampaignLaunchWorkflow
+from workflows.activities.activate_campaign import activate_campaign  # noqa: E402
+from workflows.activities.common import mark_deployment_failed, set_campaign_status  # noqa: E402
+from workflows.activities.create_campaign import create_campaign  # noqa: E402
+from workflows.activities.rollback_campaign import rollback_campaign  # noqa: E402
+from workflows.activities.set_budget import set_budget  # noqa: E402
+from workflows.activities.upload_media import upload_media  # noqa: E402
+from workflows.activities.validate_creative import validate_creative  # noqa: E402
+from workflows.bulk_launch_workflow import BulkCampaignLaunchWorkflow  # noqa: E402
 
 
 TASK_QUEUE = "ad-orchestrator-queue"

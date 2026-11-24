@@ -146,6 +146,10 @@ class CampaignViewSet(viewsets.ModelViewSet):
                 status=PlatformDeployment.Status.FAILED,
                 last_error=f"Could not start Temporal workflow: {exc}"[:4000],
             )
+            from apps.analytics.services import record_launch_failure
+
+            for row in deployments:
+                record_launch_failure(campaign.pk, row.idempotency_key, f"Could not start Temporal workflow: {exc}")
             return Response(
                 {"detail": "Temporal workflow could not be started."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,

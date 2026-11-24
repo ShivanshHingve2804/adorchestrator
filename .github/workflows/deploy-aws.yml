@@ -1,0 +1,91 @@
+name: Manual AWS ECS deployment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+      - name: Render API task definition
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          EXECUTION_ROLE_ARN: ${{ vars.ECS_EXECUTION_ROLE_ARN }}
+          TASK_ROLE_ARN: ${{ vars.ECS_TASK_ROLE_ARN }}
+          SECRET_KEY_ARN: ${{ vars.SECRET_KEY_ARN }}
+          DB_PASSWORD_ARN: ${{ vars.DB_PASSWORD_ARN }}
+          BROKER_URL_ARN: ${{ vars.BROKER_URL_ARN }}
+          AI_API_KEY_ARN: ${{ vars.AI_API_KEY_ARN }}
+          POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          REDIS_URL: ${{ vars.REDIS_URL }}
+          TEMPORAL_HOST: ${{ vars.TEMPORAL_HOST }}
+          TEMPORAL_NAMESPACE: ${{ vars.TEMPORAL_NAMESPACE }}
+          MOCK_PLATFORM_BASE_URL: ${{ vars.MOCK_PLATFORM_BASE_URL }}
+          ALLOWED_HOSTS: ${{ vars.ALLOWED_HOSTS }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_VISION_MODEL: ${{ vars.AI_VISION_MODEL }}
+          AI_TEXT_MODEL: ${{ vars.AI_TEXT_MODEL }}
+        run: |
+          jq -n \
+            --arg family "adorchestrator-api" \
+            --arg executionRole "${EXECUTION_ROLE_ARN}" \
+            --arg taskRole "${TASK_ROLE_ARN}" \
+            --arg image "${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${GITHUB_SHA}" \
+            --arg region "${AWS_REGION}" \
+            --arg dbHost "${POSTGRES_HOST}" \
+            --arg dbName "${POSTGRES_DB}" \
+            --arg dbUser "${POSTGRES_USER}" \
+            --arg redis "${REDIS_URL}" \
+            --arg temporal "${TEMPORAL_HOST}" \
+            --arg temporalNamespace "${TEMPORAL_NAMESPACE}" \
+            --arg mockUrl "${MOCK_PLATFORM_BASE_URL}" \
+            --arg allowedHosts "${ALLOWED_HOSTS}" \
+            --arg aiProvider "${AI_PROVIDER}" \
+            --arg aiBaseUrl "${AI_BASE_URL}" \
+            --arg aiVisionModel "${AI_VISION_MODEL}" \
+            --arg aiTextModel "${AI_TEXT_MODEL}" \
+            --arg secretArn "${SECRET_KEY_ARN}" \
+            --arg dbPasswordArn "${DB_PASSWORD_ARN}" \
+            --arg brokerArn "${BROKER_URL_ARN}" \
+            --arg aiKeyArn "${AI_API_KEY_ARN}" \
+            '{family:$family,networkMode:"awsvpc",requiresCompatibilities:["FARGATE"],cpu:"1024",memory:"2048",executionRoleArn:$executionRole,taskRoleArn:$taskRole,containerDefinitions:[{name:"api",image:$image,essential:true,portMappings:[{containerPort:8000,protocol:"tcp"}],environment:[{name:"DJANGO_SETTINGS_MODULE",value:"adorchestrator.settings.prod"},{name:"AWS_REGION",value:$region},{name:"POSTGRES_HOST",value:$dbHost},{name:"POSTGRES_DB",value:$dbName},{name:"POSTGRES_USER",value:$dbUser},{name:"POSTGRES_PORT",value:"5432"},{name:"POSTGRES_SSLMODE",value:"require"},{name:"REDIS_URL",value:$redis},{name:"TEMPORAL_HOST",value:$temporal},{name:"TEMPORAL_NAMESPACE",value:$temporalNamespace},{name:"MOCK_PLATFORM_BASE_URL",value:$mockUrl},{name:"ALLOWED_HOSTS",value:$allowedHosts},{name:"AI_PROVIDER",value:$aiProvider},{name:"AI_BASE_URL",value:$aiBaseUrl},{name:"AI_VISION_MODEL",value:$aiVisionModel},{name:"AI_TEXT_MODEL",value:$aiTextModel}],secrets:[{name:"SECRET_KEY",valueFrom:$secretArn},{name:"POSTGRES_PASSWORD",valueFrom:$dbPasswordArn},{name:"CELERY_BROKER_URL",valueFrom:$brokerArn},{name:"AI_API_KEY",valueFrom:$aiKeyArn}],logConfiguration:{logDriver:"awslogs",options:{"awslogs-group":"/ecs/adorchestrator-api","awslogs-region":$region,"awslogs-stream-prefix":"api"}}}]}' > task-definition.json
+      - name: Register task and deploy service
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+          ECS_SUBNET_IDS: ${{ vars.ECS_SUBNET_IDS }}
+          ECS_SECURITY_GROUP_IDS: ${{ vars.ECS_SECURITY_GROUP_IDS }}
+        run: |
+          REVISION=$(aws ecs register-task-definition --cli-input-json file://task-definition.json --query 'taskDefinition.revision' --output text)
+          NETWORK_CONFIG=$(jq -cn --argjson subnets "$ECS_SUBNET_IDS" --argjson securityGroups "$ECS_SECURITY_GROUP_IDS" '{awsvpcConfiguration:{subnets:$subnets,securityGroups:$securityGroups,assignPublicIp:"DISABLED"}}')
+          MIGRATION_TASK=$(aws ecs run-task --cluster "$ECS_CLUSTER" --launch-type FARGATE --task-definition "adorchestrator-api:$REVISION" --network-configuration "$NETWORK_CONFIG" --overrides '{"containerOverrides":[{"name":"api","command":["python","manage.py","migrate","--noinput"]}]}' --query 'tasks[0].taskArn' --output text)
+          test -n "$MIGRATION_TASK" && test "$MIGRATION_TASK" != "None"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$MIGRATION_TASK"
+          EXIT_CODE=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$MIGRATION_TASK" --query 'tasks[0].containers[?name==`api`].exitCode | [0]' --output text)
+          if [ "$EXIT_CODE" != "0" ]; then
+            aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$MIGRATION_TASK" --query 'tasks[0].{stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[*].{name:name,exitCode:exitCode,reason:reason}}' --output json
+            exit 1
+          fi
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "adorchestrator-api:$REVISION" --force-new-deployment
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"

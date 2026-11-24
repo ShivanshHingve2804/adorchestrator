@@ -1,15 +1,18 @@
-name: CI
+name: CI and container build
 
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
   pull_request:
     branches: [main]
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
 
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16-alpine
@@ -17,47 +20,57 @@ jobs:
           POSTGRES_DB: adorchestrator_test
           POSTGRES_USER: ado
           POSTGRES_PASSWORD: ado_secret
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+          --health-cmd "pg_isready -U ado -d adorchestrator_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
         image: redis:7-alpine
-        ports:
-          - 6379:6379
+        ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DJANGO_SETTINGS_MODULE: adorchestrator.settings.dev
+      SECRET_KEY: ci-only-secret
+      POSTGRES_HOST: localhost
+      POSTGRES_DB: adorchestrator_test
+      POSTGRES_USER: ado
+      POSTGRES_PASSWORD: ado_secret
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: memory://
+      CELERY_RESULT_BACKEND: cache+memory://
+      AI_PROVIDER: ollama
+      AI_BASE_URL: http://127.0.0.1:11434
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
+          cache: pip
+          cache-dependency-path: requirements/*.txt
       - name: Install dependencies
-        run: pip install -r requirements/dev.txt
-
+        run: python -m pip install --upgrade pip && pip install -r requirements/dev.txt
       - name: Lint
+        run: ruff check .
+      - name: Django checks
         run: |
-          ruff check .
-          ruff format --check .
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+      - name: Tests
+        run: python manage.py test --verbosity=2 --noinput
 
-      - name: Run tests
-        env:
-          DJANGO_SETTINGS_MODULE: adorchestrator.settings.dev
-          POSTGRES_HOST: localhost
-          POSTGRES_DB: adorchestrator_test
-          POSTGRES_USER: ado
-          POSTGRES_PASSWORD: ado_secret
-          REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: test-secret-key
-        run: python manage.py test --verbosity=2
+  container-build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: adorchestrator:ci
