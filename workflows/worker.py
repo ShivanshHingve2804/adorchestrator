@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "adorchestrator.settings.dev")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "adorchestrator.settings.base")
 
 import django
 

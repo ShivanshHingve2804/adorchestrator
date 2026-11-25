@@ -119,7 +119,7 @@ def detect_anomalies():
                 GROUP BY m.campaign_id, l.report_day
             )
             SELECT s.campaign_id, s.report_day, s.daily_spend, c.daily_budget
-            FROM spend s JOIN campaigns_campaign c ON c.idim = s.campaign_id
+            FROM spend s JOIN campaigns_campaign c ON c.id = s.campaign_id
             WHERE s.daily_spend >= c.daily_budget
             """
         )

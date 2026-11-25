@@ -119,8 +119,14 @@ services:
     volumes:
       - .:/app
     depends_on:
-      - temporal
-      - mock-platforms
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      mock-platforms:
+        condition: service_started
 
 volumes:
   pgdata:

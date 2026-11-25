@@ -1,12 +1,6 @@
 from rest_framework import serializers
 
-from .models import Alert, PerformanceSnapshot
-
-
-class PerformanceSnapshotSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PerformanceSnapshot
-        fields = "__all__"
+from .models import Alert
 
 
 class AlertSerializer(serializers.ModelSerializer):

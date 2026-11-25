@@ -14,6 +14,7 @@ class Migration(migrations.Migration):
     initial = False
 
     dependencies = [
+        # Keep the original dependency for databases where this migration is already applied.
         ("campaigns", "0001_initial"),
         ("budgets", "0001_initial"),
     ]

@@ -82,7 +82,7 @@ def refresh_performance_snapshots():
                    m.impressions, m.clicks, m.conversions, m.spend, m.revenue,
                    m.ctr, m.cpa, m.roas, NOW()
             FROM analytics_mv_campaign_daily_perf m
-            JOIN campaigns_campaign c ON c.idim = m.campaign_id
+            JOIN campaigns_campaign c ON c.id = m.campaign_id
             JOIN campaigns_creative cr ON cr.id = m.creative_id
             ON CONFLICT (campaign_id, creative_id, platform, snapshot_date) DO UPDATE SET
               impressions = EXCLUDED.impressions,

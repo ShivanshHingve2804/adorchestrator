@@ -4,10 +4,6 @@ from .models import Campaign, Creative, PlatformDeployment
 
 
 class CampaignSerializer(serializers.ModelSerializer):
-    # The preserved in-progress campaign edit names its UUID field `idim`.
-    # Expose the stable API field name as `id` without changing that model.
-    id = serializers.UUIDField(source="pk", read_only=True)
-
     class Meta:
         model = Campaign
         fields = (

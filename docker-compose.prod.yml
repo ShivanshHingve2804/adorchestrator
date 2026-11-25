@@ -118,6 +118,10 @@ services:
       DJANGO_SETTINGS_MODULE: adorchestrator.settings.prod
     command: python -m workflows.worker
     depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       temporal:
         condition: service_started
       mock-platforms:

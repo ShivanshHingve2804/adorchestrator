@@ -39,7 +39,7 @@ def compute_feature_correlations(days=7):
                    SUM(m.revenue) AS revenue
             FROM analytics_mv_campaign_daily_perf m
             JOIN campaigns_creative cr ON cr.id = m.creative_id
-            JOIN campaigns_campaign ca ON ca.idim = m.campaign_id
+            JOIN campaigns_campaign ca ON ca.id = m.campaign_id
             WHERE m.snapshot_date >= %s
             GROUP BY m.creative_id, cr.name, ca.name
             ORDER BY SUM(m.revenue) / NULLIF(SUM(m.spend), 0) DESC NULLS LAST
