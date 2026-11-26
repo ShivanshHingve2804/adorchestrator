@@ -18,6 +18,9 @@ async def _get_creative_details(creative_id):
 async def _update_deployment(deployment_key, **fields):
     from apps.campaigns.models import PlatformDeployment
 
+    if "retry_count" not in fields and activity.in_activity():
+        fields["retry_count"] = max(0, activity.info().attempt - 1)
+
     def update():
         PlatformDeployment.objects.filter(idempotency_key=deployment_key).update(
             **fields, updated_at=timezone.now()
@@ -27,7 +30,11 @@ async def _update_deployment(deployment_key, **fields):
             if deployment:
                 from apps.analytics.services import record_launch_failure
 
-                record_launch_failure(deployment.campaign_id, deployment_key, fields.get("last_error", "Campaign launch failed"))
+                record_launch_failure(
+                    deployment.campaign_id,
+                    deployment_key,
+                    fields.get("last_error") or "Campaign launch failed",
+                )
 
     await sync_to_async(update, thread_sensitive=True)()
 
@@ -51,7 +58,7 @@ async def _post_platform(platform, endpoint, payload):
             response = await client.post(url, json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 429 and 400 <= exc.response.status_code < 500:
+            if exc.response.status_code not in {408, 429} and 400 <= exc.response.status_code < 500:
                 raise ApplicationError(
                     f"Platform rejected {endpoint}: {exc.response.text}",
                     type="InvalidMediaError",
@@ -80,6 +87,8 @@ async def _delete_platform_campaign(platform, platform_campaign_id):
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0)) as client:
         try:
             response = await client.delete(url)
+            if response.status_code == 404:
+                return {"campaign_id": platform_campaign_id, "already_deleted": True}
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(

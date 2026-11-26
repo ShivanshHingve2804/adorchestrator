@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 
 @dataclass
@@ -110,8 +111,10 @@ class BulkCampaignLaunchWorkflow:
                         retry_policy=activity_retry,
                     )
                     if rollback_errors:
-                        raise RuntimeError(
-                            f"Launch failed ({exc}); compensation also failed: {'; '.join(rollback_errors)}"
+                        raise ApplicationError(
+                            f"Launch failed ({exc}); compensation also failed: {'; '.join(rollback_errors)}",
+                            type="SagaCompensationError",
+                            non_retryable=True,
                         ) from exc
                     raise
 
