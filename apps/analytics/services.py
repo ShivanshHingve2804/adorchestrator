@@ -1,12 +1,14 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 from django.core.cache import cache
 from django.db import connection
+from django.utils import timezone
 
 from .models import Alert
 
 
 REPORT_CACHE_TTL = 300
+REPORT_VERSION_KEY = "report:cache_version"
 
 
 def record_launch_failure(campaign_id, deployment_key, message):
@@ -24,14 +26,29 @@ def record_launch_failure(campaign_id, deployment_key, message):
 
 class ReportingService:
     @staticmethod
-    def get_campaign_report(campaign_id, days=7):
+    def _cache_version():
+        version = cache.get(REPORT_VERSION_KEY)
+        if version is None:
+            return 1
+        return int(version)
+
+    @classmethod
+    def invalidate_report_cache(cls):
+        try:
+            cache.incr(REPORT_VERSION_KEY)
+        except ValueError:
+            cache.set(REPORT_VERSION_KEY, 2, None)
+
+    @classmethod
+    def get_campaign_report(cls, campaign_id, days=7):
         days = max(1, min(int(days), 90))
-        cache_key = f"report:v1:{campaign_id}:{days}"
+        version = cls._cache_version()
+        cache_key = f"report:v{version}:{campaign_id}:{days}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        start_date = date.today() - timedelta(days=days - 1)
+        start_date = timezone.now().date() - timedelta(days=days - 1)
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -96,3 +113,4 @@ def refresh_performance_snapshots():
               updated_at = NOW()
             """
         )
+    ReportingService.invalidate_report_cache()

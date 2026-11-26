@@ -7,7 +7,13 @@ from apps.campaigns.models import Campaign
 
 from .models import BudgetAdjustment
 from .serializers import AdjustBudgetRequestSerializer, BudgetAdjustmentSerializer
-from .services import BudgetService, ConflictError
+from .services import (
+    BudgetService,
+    BudgetValidationError,
+    CampaignNotFoundError,
+    ConflictError,
+    LockUnavailableError,
+)
 
 
 class AdjustBudgetView(APIView):
@@ -24,8 +30,14 @@ class AdjustBudgetView(APIView):
                 reason=values["reason"],
                 idempotency_key=values.get("idempotency_key"),
             )
+        except BudgetValidationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except CampaignNotFoundError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
         except ConflictError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except LockUnavailableError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response(BudgetAdjustmentSerializer(adjustment).data, status=status.HTTP_200_OK)
 
 

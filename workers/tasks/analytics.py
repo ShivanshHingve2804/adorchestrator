@@ -1,10 +1,12 @@
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from celery import shared_task
-from django.db import connection
+from django.db import OperationalError, connection, transaction
+from django.utils import timezone
 
 from apps.analytics.models import Alert
+from apps.budgets.services import BudgetService, ConflictError, LockUnavailableError
 
 
 CPA_SPIKE_THRESHOLD = Decimal("1.5")
@@ -18,21 +20,60 @@ def refresh_materialized_views():
     refresh_performance_snapshots()
 
 
+def _ensure_daily_partition(cursor, partition_day):
+    """Create a UTC-day partition safely, migrating any matching rows from the default partition."""
+    suffix = partition_day.strftime("%Y%m%d")
+    name = f"analytics_ad_event_{suffix}"
+    cursor.execute("SELECT to_regclass(%s)", [name])
+    if cursor.fetchone()[0] is not None:
+        return
+
+    start_iso = f"{partition_day.isoformat()}T00:00:00+00:00"
+    end_iso = f"{(partition_day + timedelta(days=1)).isoformat()}T00:00:00+00:00"
+
+    with transaction.atomic():
+        cursor.execute("SELECT to_regclass('analytics_ad_event_default')")
+        has_default = cursor.fetchone()[0] is not None
+        moved_rows = False
+        if has_default:
+            cursor.execute(
+                "SELECT EXISTS (SELECT 1 FROM analytics_ad_event_default "
+                "WHERE event_time >= %s AND event_time < %s)",
+                [start_iso, end_iso],
+            )
+            moved_rows = bool(cursor.fetchone()[0])
+            if moved_rows:
+                cursor.execute(
+                    "CREATE TEMP TABLE IF NOT EXISTS _tmp_moved_ad_events (LIKE analytics_ad_event) ON COMMIT DROP"
+                )
+                cursor.execute("TRUNCATE _tmp_moved_ad_events")
+                cursor.execute(
+                    "INSERT INTO _tmp_moved_ad_events "
+                    "SELECT * FROM analytics_ad_event_default WHERE event_time >= %s AND event_time < %s",
+                    [start_iso, end_iso],
+                )
+                cursor.execute(
+                    "DELETE FROM analytics_ad_event_default WHERE event_time >= %s AND event_time < %s",
+                    [start_iso, end_iso],
+                )
+
+        cursor.execute(
+            f'CREATE TABLE IF NOT EXISTS "{name}" PARTITION OF analytics_ad_event '
+            f"FOR VALUES FROM ('{start_iso}') TO ('{end_iso}')"
+        )
+        if moved_rows:
+            cursor.execute("INSERT INTO analytics_ad_event SELECT * FROM _tmp_moved_ad_events")
+            cursor.execute("DROP TABLE IF EXISTS _tmp_moved_ad_events")
+
+
 @shared_task
 def maintain_event_partitions():
-    """Keep daily partitions ahead of writes and detach data older than 90 days."""
-    today = date.today()
+    """Keep daily UTC partitions ahead of writes and drop partitions older than 90 days."""
+    today = timezone.now().date()
     with connection.cursor() as cursor:
         for offset in range(0, 32):
-            partition_day = today + timedelta(days=offset)
-            suffix = partition_day.strftime("%Y%m%d")
-            name = f"analytics_ad_event_{suffix}"
-            start = partition_day.isoformat()
-            end = (partition_day + timedelta(days=1)).isoformat()
-            cursor.execute(
-                f'CREATE TABLE IF NOT EXISTS "{name}" PARTITION OF analytics_ad_event '
-                f"FOR VALUES FROM ('{start}') TO ('{end}')"
-            )
+            _ensure_daily_partition(cursor, today + timedelta(days=offset))
+
         cutoff = today - timedelta(days=90)
         cursor.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = current_schema() "
@@ -70,8 +111,8 @@ def detect_anomalies():
                 FROM latest l
                 JOIN daily r ON r.campaign_id = l.campaign_id AND r.snapshot_date = l.report_day
                 LEFT JOIN LATERAL (
-                    SELECT AVG(spend / NULLIF(conversions, 0)) AS avg_cpa,
-                           AVG(revenue / NULLIF(spend, 0)) AS avg_roas
+                    SELECT SUM(spend) / NULLIF(SUM(conversions), 0) AS avg_cpa,
+                           SUM(revenue) / NULLIF(SUM(spend), 0) AS avg_roas
                     FROM daily d
                     WHERE d.campaign_id = l.campaign_id
                       AND d.snapshot_date BETWEEN l.report_day - 7 AND l.report_day - 1
@@ -145,16 +186,15 @@ def _record_anomaly(campaign_id, report_day, alert_type, severity, message, cont
     )
 
 
-@shared_task(autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
+@shared_task(
+    autoretry_for=(ConflictError, LockUnavailableError, OperationalError),
+    retry_backoff=True,
+    max_retries=3,
+)
 def trigger_budget_reduction(campaign_id, multiplier, report_day, alert_type):
-    from apps.budgets.services import BudgetService
-    from apps.campaigns.models import Campaign
-
-    campaign = Campaign.objects.get(pk=campaign_id)
-    new_budget = (campaign.daily_budget * Decimal(multiplier)).quantize(Decimal("0.0001"))
-    BudgetService.adjust_budget(
-        campaign_id=campaign.pk,
-        new_budget=new_budget,
+    BudgetService.scale_budget(
+        campaign_id=campaign_id,
+        multiplier=multiplier,
         trigger_type=f"AUTO_{alert_type}",
         reason=f"Automatic {alert_type} adjustment for {report_day}.",
         idempotency_key=f"anomaly:{alert_type}:{campaign_id}:{report_day}",

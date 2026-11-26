@@ -80,7 +80,9 @@ Atomically adjust a campaign's `daily_budget` using two-layer locking (Redis `SE
 Supported `trigger_type` values: `MANUAL`, `AUTO_CPA_SPIKE`, `AUTO_ROAS_DROP`.
 
 - **200 OK:** Budget updated (or replayed via `idempotency_key`), returning the `BudgetAdjustment` record with `original_budget` / `old_budget`, `new_budget`, `budget_change`, `percent_delta`, and `lock_token`.
-- **409 Conflict:** Returned when another concurrent writer currently holds `budget_lock:{campaign_id}` or the Redis lock service is unreachable.
+- **400 Bad Request:** Returned when `new_budget` is negative or exceeds `total_budget`.
+- **409 Conflict:** Returned when another concurrent writer holds `budget_lock:{campaign_id}` or an `idempotency_key` is reused with conflicting parameters.
+- **503 Service Unavailable:** Returned when the Redis distributed lock backend is unreachable.
 
 ### `GET /api/budgets/campaigns/{campaign_id}/budget-history/`
 Return the reverse-chronological `BudgetAdjustment` audit log for the campaign.
