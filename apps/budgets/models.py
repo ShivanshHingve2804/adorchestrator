@@ -1,8 +1,9 @@
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 
 class BudgetAdjustment(models.Model):
@@ -223,27 +224,31 @@ class BudgetAdjustment(models.Model):
     def save(self, *args, **kwargs):
         # Auto-compute budget_change and percent_delta on first save
         if (
-            not self.pk
+            self._state.adding
             and self.new_budget is not None
             and self.original_budget is not None
         ):
             change = self.new_budget - self.original_budget
-            self.budget_change = change.quantize(Decimal("0.0001"))
-            percent = (change / self.original_budget * 100) if self.original_budget else Decimal("0")
-            self.percent_delta = percent.quantize(Decimal("0.0001"))
+            self.budget_change = change.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+            percent = (
+                (change / self.original_budget * Decimal("100"))
+                if self.original_budget
+                else Decimal("0")
+            )
+            self.percent_delta = percent.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
         return super().save(*args, **kwargs)
 
     def roll_back(self, reason: str = "Budget adjustment rolled back"):
         """Mark adjustment as rolled back via audit flow."""
-        if self.status != self.Status.APPROVED:  # Only APPROVED can be rolled back
-            raise ValueError(f"Can only roll back APPROVED adjustments, got {self.status}")
+        if self.status not in (self.Status.APPROVED, self.Status.EXECUTED):
+            raise ValueError(f"Can only roll back APPROVED or EXECUTED adjustments, got {self.status}")
 
         self.status = self.Status.ROLLED_BACK
         self.audit_log.append({
             "action": "ROLLBACK",
             "reason": reason,
-            "timestamp": self.updated_at.isoformat(),
+            "timestamp": timezone.now().isoformat(),
         })
         self.save()
 
@@ -265,10 +270,10 @@ class BudgetAdjustment(models.Model):
             "concurrency_token": str(self.concurrency_token),
             "source": self.source,
             "adjustment_type": self.adjustment_type,
-            "new_budget": float(self.new_budget),
-            "original_budget": float(self.original_budget),
-            "budget_change": float(self.budget_change),
-            "percent_delta": float(self.percent_delta),
+            "new_budget": str(self.new_budget),
+            "original_budget": str(self.original_budget),
+            "budget_change": str(self.budget_change),
+            "percent_delta": str(self.percent_delta),
             "platform_idempotency_key": self.platform_idempotency_key,
             "campaign_idempotency_key": self.campaign_idempotency_key,
             "default_account": self.default_account,

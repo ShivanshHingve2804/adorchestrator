@@ -359,3 +359,51 @@ class P0ErrorTypeUnitTests(TestCase):
     def test_conflict_and_lock_unavailable_are_distinct(self):
         self.assertFalse(issubclass(LockUnavailableError, ConflictError))
         self.assertFalse(issubclass(BudgetValidationError, ConflictError))
+
+
+class BudgetAdjustmentModelTests(TestCase):
+    def setUp(self):
+        self.campaign = Campaign.objects.create(
+            name="Model fixes campaign",
+            daily_budget=Decimal("600.0000"),
+            total_budget=Decimal("3000.0000"),
+        )
+
+    def test_save_auto_computes_deltas_on_create_with_round_half_up(self):
+        adjustment = BudgetAdjustment.objects.create(
+            campaign=self.campaign,
+            concurrency_token=uuid.uuid4(),
+            source="SOURCE_SPEND_HOUSE_CORR_ACCOUNTS",
+            adjustment_type="TYPE_ABSOLUTE",
+            new_budget=Decimal("400.0000"),
+            original_budget=Decimal("600.0000"),
+            campaign_idempotency_key="camp-model-1",
+            status=BudgetAdjustment.Status.EXECUTED,
+        )
+        self.assertEqual(adjustment.budget_change, Decimal("-200.0000"))
+        self.assertEqual(adjustment.percent_delta, Decimal("-33.3333"))
+
+    def test_roll_back_supports_executed_and_to_dict_serializes_strings(self):
+        adjustment = BudgetAdjustment.objects.create(
+            campaign=self.campaign,
+            concurrency_token=uuid.uuid4(),
+            source="SOURCE_SPEND_HOUSE_CORR_ACCOUNTS",
+            adjustment_type="TYPE_ABSOLUTE",
+            new_budget=Decimal("450.0000"),
+            original_budget=Decimal("600.0000"),
+            campaign_idempotency_key="camp-model-2",
+            status=BudgetAdjustment.Status.EXECUTED,
+        )
+        adjustment.roll_back("reverting executed adjustment")
+        adjustment.refresh_from_db()
+
+        self.assertEqual(adjustment.status, BudgetAdjustment.Status.ROLLED_BACK)
+        self.assertEqual(len(adjustment.audit_log), 1)
+        self.assertEqual(adjustment.audit_log[0]["action"], "ROLLBACK")
+        self.assertTrue(adjustment.audit_log[0]["timestamp"])
+
+        payload = adjustment.to_dict()
+        self.assertEqual(payload["new_budget"], "450.0000")
+        self.assertEqual(payload["original_budget"], "600.0000")
+        self.assertEqual(payload["budget_change"], "-150.0000")
+        self.assertEqual(payload["percent_delta"], "-25.0000")
